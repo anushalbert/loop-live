@@ -23,6 +23,9 @@
   #view { display:block; width:100%; height:auto; }
   #banner { position:absolute; left:50%; top:12px; transform:translateX(-50%); padding:8px 16px; border-radius:999px; font-weight:700; font-size:16px; background:var(--red); color:#fff; box-shadow:0 0 24px rgba(255,59,78,.7); display:none; white-space:nowrap; }
   #hold { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); padding:6px 12px; border-radius:999px; background:rgba(255,176,32,.92); color:#1a1000; font-weight:600; font-size:13px; display:none; }
+  #tip { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); padding:6px 12px; border-radius:999px; background:rgba(58,160,255,.92); color:#001226; font-weight:600; font-size:13px; display:none; text-align:center; max-width:90%; }
+  .place { margin:0 16px 10px; padding:10px 12px; border:1px solid var(--line); border-radius:10px; background:var(--panel); font-size:13px; color:var(--muted); }
+  .place b { color:var(--text); }
   #empty { padding:48px 16px; text-align:center; color:var(--muted); }
   .stats { display:flex; flex-wrap:wrap; gap:8px 18px; padding:10px 16px; color:var(--muted); font-size:13px; }
   .stats b { color:var(--text); font-weight:600; }
@@ -41,7 +44,7 @@
 <body>
 <header>
   <h1>Loop Live</h1>
-  <span class="sub">Point any camera at a road. Each road user's path is predicted about 2 seconds ahead, and pairs about to collide turn red.</span>
+  <span class="sub">Point any camera at a road. Each road user's path is predicted about 3 seconds ahead: amber when two paths meet within 3 s, red under 1.5 s.</span>
 </header>
 
 <div class="bar">
@@ -51,12 +54,15 @@
   <button id="stop" disabled>Stop</button>
 </div>
 
+<div class="place"><b>Camera placement matters most.</b> Mount it high (first floor or above, a pole, a bridge) and still, looking down at the junction at about 30 to 60 degrees, with the whole junction in view. From road level, vehicles hide each other and their paths cannot be judged.</div>
+
 <div id="stage">
   <div id="empty">Loading the detector…</div>
   <video id="video" playsinline muted></video>
   <canvas id="view" hidden></canvas>
   <div id="banner">⚠ About to collide</div>
   <div id="hold">Camera is moving: hold it still or rest it on something</div>
+  <div id="tip">Camera looks low or close: raise it and look down at the junction</div>
 </div>
 
 <div class="stats">
@@ -69,16 +75,16 @@
   <span><span class="dot" style="background:var(--blue)"></span>vehicle and its predicted path</span>
   <span><span class="dot" style="background:var(--green)"></span>two-wheeler</span>
   <span><span class="dot" style="background:#c08cff"></span>person</span>
-  <span><span class="dot" style="background:var(--amber)"></span>paths meet within 2 s</span>
-  <span><span class="dot" style="background:var(--red)"></span>about to collide (under 1 s)</span>
+  <span><span class="dot" style="background:var(--amber)"></span>heads-up: paths meet within 3 s</span>
+  <span><span class="dot" style="background:var(--red)"></span>about to collide (under 1.5 s)</span>
 </div>
 
 <h2>Warnings</h2>
 <ul id="log"><li class="none">None yet.</li></ul>
 
 <div class="note">
-  <p><b>How it works.</b> A YOLO11n detector runs on this device and finds cars, two-wheelers, buses, trucks and people several times a second. Each one is tracked, and its path is projected forward at its current speed and direction. When two paths would overlap within 2 seconds, the pair turns amber. Under 1 second, while closing faster than about 15 km/h, it turns red and the warning is logged. Loop uses similar rules on recorded video.</p>
-  <p><b>Limits.</b> This is one ordinary camera with no calibration, so distances and speeds are rough and some warnings will be false. It predicts the next 1 to 2 seconds of motion, not crashes. Works best from a fixed, raised spot looking down at a junction. A moving or shaking camera makes everything look like it moves, so the page pauses warnings until it is held still.</p>
+  <p><b>How it works.</b> A YOLO11n detector runs on this device and finds cars, two-wheelers, buses, trucks and people several times a second. Each one is tracked, and its path is projected forward at its current speed and direction. When two paths would overlap within 3 seconds, the pair turns amber (a heads-up). Under 1.5 seconds, while closing faster than about 15 km/h, it turns red. Each one is logged with its pattern: crossing paths, same direction (rear-end or side-swipe), head-on, heading into a stopped vehicle, or a person in the path. Parked and stopped vehicles are tracked and labelled "still", so a vehicle heading into one is warned on. Loop uses similar rules on recorded video.</p>
+  <p><b>Limits.</b> This is one ordinary camera with no calibration, so distances and speeds are rough and some warnings will be false. It predicts the next 3 seconds of motion at current speed and direction, not crashes. Works best from a fixed, raised spot looking down at a junction. A moving or shaking camera makes everything look like it moves, so the page pauses warnings until it is held still.</p>
   <p><b>Privacy.</b> The video is processed on this device. Nothing is uploaded or saved.</p>
   <p><b>Laptop with DroidCam:</b> start DroidCam on the phone and the laptop, then pick "DroidCam" in the camera list above.</p>
   <p>Detector: Ultralytics YOLO11n (AGPL-3.0). Runtime: ONNX Runtime Web.</p>

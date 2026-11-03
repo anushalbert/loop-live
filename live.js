@@ -9,13 +9,14 @@ const WIDTH_M = { car: 1.8, truck: 2.5, bus: 2.5, motorcycle: 0.8, bicycle: 0.6,
 const GROUP = { car: 'veh', bus: 'veh', truck: 'veh', motorcycle: 'two', bicycle: 'two', person: 'ped' };
 const COLOR = { veh: '#3aa0ff', two: '#25d17a', ped: '#c08cff' };
 const AMBER = '#ffb020', RED = '#ff3b4e';
-const CONF = 0.35, NMS_IOU = 0.5;
+const CONF = 0.25, NMS_IOU = 0.5;               // 0.25 keeps small, far and parked vehicles
 const FOOT = 0.25;                               // footprint = bottom quarter of the box
-const HORIZON = 2.0;                             // seconds of predicted path
-const RED_TTC = 1.0, RED_CLOSING = 4.2;          // < 1 s and closing > ~15 km/h
-const AMBER_TTC = 2.0, AMBER_CLOSING = 2.5;
+const HORIZON = 3.0;                             // seconds of predicted path
+const RED_TTC = 1.5, RED_CLOSING = 4.2;          // < 1.5 s and closing > ~15 km/h
+const AMBER_TTC = 3.0, AMBER_CLOSING = 3.5;      // amber: paths meet within 3 s, closing > ~13 km/h
 const FAST_CLOSING = 6.0;                        // > ~22 km/h: on slow devices, warn on the first look
-const LOST_S = 0.8, VEL_WINDOW = 0.6;
+const LOST_S = 0.8, LOST_STILL_S = 2.0, VEL_WINDOW = 0.6;   // parked vehicles flicker in and out: keep them longer
+const STILL = 0.8;                               // m/s: slower than this is shown as "still"
 
 const $ = (id) => document.getElementById(id);
 const video = $('video'), view = $('view'), ctx = view.getContext('2d');
@@ -24,7 +25,7 @@ const pctx = pre.getContext('2d', { willReadFrequently: true });
 
 let session = null, inputName = 'images', modelBytes = null;
 let running = false, stream = null, fileUrl = null, isFile = false;
-let tracks = [], nextId = 1, pairState = new Map(), warnings = [], lastLogged = new Map();
+let tracks = [], nextId = 1, pairState = new Map(), warnings = [], lastLogged = new Map(), firstSeen = new Map();
 let frameW = 1, frameH = 1, cameraMoving = false, detTimes = [], rate = 10;
 // a warning must hold for 2 looks, except on slow devices where 2 looks would come too late
 const needStreak = (p) => rate >= 5 || p.closing < FAST_CLOSING ? 2 : 1;
@@ -115,6 +116,8 @@ const foot = (b) => [b[0], b[3] - FOOT * (b[3] - b[1]), b[2], b[3]];
 const center = (b) => [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
 const shift = (b, dx, dy) => [b[0] + dx, b[1] + dy, b[2] + dx, b[3] + dy];
 const mpp = (T) => WIDTH_M[T.cls] / Math.max(T.box[2] - T.box[0], 4);
+const speedMs = (T) => Math.hypot(T.v[0], T.v[1]) * mpp(T);
+const isStill = (T) => T.hits >= 3 && speedMs(T) < STILL;
 
 function velocity(hist) {
   // last VEL_WINDOW seconds, but at least 4 looks (slow devices see only ~3 frames a second)
@@ -163,7 +166,7 @@ function updateTracks(dets, t, W) {
     const f = center(foot(D.box));
     tracks.push({ id: nextId++, cls: D.cls, votes: { [D.cls]: 1 }, box: D.box, lastT: t, hits: 1, v: [0, 0], hist: [{ t, x: f[0], y: f[1] }] });
   });
-  tracks = tracks.filter(T => t - T.lastT <= LOST_S);
+  tracks = tracks.filter(T => t - T.lastT <= (isStill(T) ? LOST_STILL_S : LOST_S));
 
   // camera moving: nearly every confirmed road user, parked ones included, drifts the same way
   const conf = tracks.filter(T => T.hits >= 3 && T.lastT === t);
@@ -196,6 +199,18 @@ function overlapSmall(a, b) {
   return iw * ih / Math.max(Math.min((a[2] - a[0]) * (a[3] - a[1]), (b[2] - b[0]) * (b[3] - b[1])), 1e-6);
 }
 
+/* the kind of conflict, from the two paths: the patterns that come before most junction crashes */
+function pattern(A, B) {
+  const ga = GROUP[A.cls], gb = GROUP[B.cls];
+  if (ga === 'ped' || gb === 'ped') return 'person in the path';
+  const sa = isStill(A), sb = isStill(B);
+  if (sa || sb) return 'heading into a stopped ' + NAME[(sa ? A : B).cls];
+  const c = (A.v[0] * B.v[0] + A.v[1] * B.v[1]) / ((Math.hypot(...A.v) * Math.hypot(...B.v)) || 1);
+  if (c > 0.7) return 'same direction: rear-end or side-swipe';
+  if (c < -0.7) return 'head-on';
+  return 'crossing paths';
+}
+
 function assess(t) {
   // boxes cut off by the image edge have false sizes and jumpy centres: shown, never warned on
   const inside = (b) => b[0] > 3 && b[1] > 3 && b[2] < frameW - 3 && b[3] < frameH - 3;
@@ -217,15 +232,26 @@ function assess(t) {
     const key = A.id < B.id ? `${A.id}-${B.id}` : `${B.id}-${A.id}`;
     const prev = pairState.get(key);
     const streak = prev && prev.level >= level ? prev.streak + 1 : 1;
-    now.set(key, { a: A, b: B, ttc, closing, level, streak });
+    now.set(key, { a: A, b: B, ttc, closing, level, streak, kind: pattern(A, B) });
   }
   pairState = now;
+  for (const [key, ft] of firstSeen) if (!now.has(key) && t - ft.last > 1.0) firstSeen.delete(key);
   if (cameraMoving) return;
   for (const [key, p] of pairState) {
-    if (p.level < 2 || p.streak < needStreak(p)) continue;
-    if (t - (lastLogged.get(key) ?? -1e9) < 3) continue;
-    lastLogged.set(key, t);
-    warnings.unshift({ t, a: p.a.cls, b: p.b.cls, ttc: p.ttc, kmh: p.closing * 3.6 });
+    if (p.streak < needStreak(p)) continue;
+    const f = firstSeen.get(key) || { t, last: t, logged: 0 };
+    f.last = t; firstSeen.set(key, f);
+    // heads-up (amber): once per pair; warning (red): at most every 3 s per pair
+    // (slow queues bunch up all the time: only approaches fast enough to turn red are logged)
+    if (p.level === 1 && !f.logged && p.closing > RED_CLOSING) {
+      f.logged = 1;
+      warnings.unshift({ t, level: 1, a: p.a.cls, b: p.b.cls, ttc: p.ttc, kmh: p.closing * 3.6, kind: p.kind, lead: 0 });
+      renderLog();
+    }
+    if (p.level < 2 || t - (lastLogged.get(key) ?? -1e9) < 3) continue;
+    lastLogged.set(key, t); f.logged = 2;
+    warnings.unshift({ t, level: 2, a: p.a.cls, b: p.b.cls, ttc: p.ttc, kmh: p.closing * 3.6, kind: p.kind,
+                       lead: t - f.t + p.ttc });
     renderLog();
   }
 }
@@ -237,9 +263,11 @@ function clock(t) {
   return new Date().toLocaleTimeString();
 }
 function renderLog() {
-  $('nw').textContent = warnings.length;
-  $('log').innerHTML = warnings.length ? warnings.slice(0, 50).map(w =>
-    `<li><span class="tag" style="background:${RED}">about to collide</span> ${NAME[w.a]} and ${NAME[w.b]} · in ${w.ttc.toFixed(1)} s · closing ~${Math.round(w.kmh)} km/h · ${clock(w.t)}</li>`).join('')
+  const red = warnings.filter(w => w.level === 2).length;
+  $('nw').textContent = `${red} red · ${warnings.length - red} heads-up`;
+  $('log').innerHTML = warnings.length ? warnings.slice(0, 50).map(w => w.level === 2
+    ? `<li><span class="tag" style="background:${RED}">about to collide</span> ${NAME[w.a]} and ${NAME[w.b]} · ${w.kind} · in ${w.ttc.toFixed(1)} s · closing ~${Math.round(w.kmh)} km/h · first flagged ${w.lead.toFixed(1)} s before · ${clock(w.t)}</li>`
+    : `<li><span class="tag" style="background:${AMBER};color:#1a1000">heads-up</span> ${NAME[w.a]} and ${NAME[w.b]} · ${w.kind} · paths meet in ${w.ttc.toFixed(1)} s · ${clock(w.t)}</li>`).join('')
     : '<li class="none">None yet.</li>';
 }
 
@@ -263,6 +291,7 @@ function draw() {
   }
   const lw = Math.max(2, W / 400);
   const twos = tracks.filter(T => T.hits >= 3 && GROUP[T.cls] === 'two');
+  const heights = [];
   for (const T of tracks) {
     if (T.hits < 3) continue;
     if (GROUP[T.cls] === 'ped' && twos.some(B => overlapSmall(T.box, B.box) > 0.3)) continue;   // rider: drawn as the bike
@@ -272,7 +301,7 @@ function draw() {
     const f = foot(b), [fx, fy] = center(f), fw = f[2] - f[0];
     // predicted path: a ribbon from the footprint to where it will be in HORIZON seconds
     const ex = fx + T.v[0] * sx * HORIZON, ey = fy + T.v[1] * sy * HORIZON;
-    if (Math.hypot(ex - fx, ey - fy) > 6) {
+    if (!isStill(T) && Math.hypot(ex - fx, ey - fy) > 6) {
       const gr = ctx.createLinearGradient(fx, fy, ex, ey);
       gr.addColorStop(0, col + 'cc'); gr.addColorStop(1, col + '00');
       ctx.strokeStyle = gr; ctx.lineCap = 'round'; ctx.lineWidth = Math.min(Math.max(lw * 2, fw * 0.3), W / 40);
@@ -284,6 +313,13 @@ function draw() {
     ctx.shadowBlur = 0;
     ctx.beginPath(); ctx.ellipse(fx, b[3], fw / 2, Math.max(3, fw / 10), 0, 0, Math.PI * 2);
     ctx.fillStyle = col + '55'; ctx.fill();
+    // what it is, and whether it is still
+    const tag = NAME[T.cls] + (isStill(T) ? ' · still' : ''), fs = Math.max(11, Math.min(16, W / 90));
+    ctx.font = `600 ${fs}px system-ui, sans-serif`;
+    const tw = ctx.measureText(tag).width, ty = Math.max(fs + 4, b[1] - 4);
+    ctx.fillStyle = 'rgba(5,7,13,.75)'; roundRect(b[0], ty - fs - 2, tw + 8, fs + 6, 4); ctx.fill();
+    ctx.fillStyle = col; ctx.fillText(tag, b[0] + 4, ty);
+    heights.push((b[3] - b[1]) / H);
   }
   let red = false;
   ctx.font = `600 ${Math.max(13, W / 70)}px system-ui, sans-serif`;
@@ -300,6 +336,10 @@ function draw() {
   }
   $('banner').style.display = red ? 'block' : 'none';
   $('hold').style.display = cameraMoving ? 'block' : 'none';
+  // a low camera sees vehicles big and hiding each other, so paths cannot be judged
+  heights.sort((a, b) => a - b);
+  const low = heights.length >= 2 && heights[heights.length >> 1] > 0.3;
+  $('tip').style.display = low && !cameraMoving ? 'block' : 'none';
   $('n').textContent = tracks.filter(T => T.hits >= 3).length;
 }
 
@@ -325,7 +365,7 @@ async function detectLoop() {
 
 /* ---------- sources ---------- */
 function reset() {
-  tracks = []; pairState = new Map(); warnings = []; lastLogged = new Map(); detTimes = []; renderLog();
+  tracks = []; pairState = new Map(); warnings = []; lastLogged = new Map(); firstSeen = new Map(); detTimes = []; renderLog();
 }
 async function begin() {
   await new Promise(r => { if (video.readyState >= 1) r(); else video.onloadedmetadata = r; });
@@ -345,7 +385,7 @@ function stop(clearView = true) {
   if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
   if (!clearView) return;
   video.pause();
-  $('banner').style.display = 'none'; $('hold').style.display = 'none';
+  $('banner').style.display = 'none'; $('hold').style.display = 'none'; $('tip').style.display = 'none';
 }
 
 async function listCameras(selected) {
