@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Loop Live</title>
+<meta name="description" content="Live close-call warning from any camera pointed at a road. Runs on your device; no video leaves it.">
+<style>
+  :root { --bg:#05070d; --panel:#0d1220; --line:#1f2a44; --text:#e8eefc; --muted:#8c9abb; --blue:#3aa0ff; --green:#25d17a; --amber:#ffb020; --red:#ff3b4e; }
+  * { box-sizing:border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--text); font:15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { padding:12px 16px 8px; display:flex; flex-wrap:wrap; gap:8px 16px; align-items:baseline; }
+  header h1 { margin:0; font-size:20px; letter-spacing:.2px; }
+  header .sub { color:var(--muted); font-size:13px; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; padding:0 16px 10px; align-items:center; }
+  button, select, label.file { background:var(--panel); color:var(--text); border:1px solid var(--line); border-radius:10px; padding:9px 12px; font:inherit; cursor:pointer; }
+  button.primary { background:var(--blue); border-color:var(--blue); color:#001226; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  select { max-width:100%; }
+  label.file input { display:none; }
+  #stage { position:relative; margin:0 16px; border-radius:14px; overflow:hidden; background:#000; border:1px solid var(--line); }
+  #stage video { display:none; }
+  #view { display:block; width:100%; height:auto; }
+  #banner { position:absolute; left:50%; top:12px; transform:translateX(-50%); padding:8px 16px; border-radius:999px; font-weight:700; font-size:16px; background:var(--red); color:#fff; box-shadow:0 0 24px rgba(255,59,78,.7); display:none; white-space:nowrap; }
+  #hold { position:absolute; left:50%; bottom:12px; transform:translateX(-50%); padding:6px 12px; border-radius:999px; background:rgba(255,176,32,.92); color:#1a1000; font-weight:600; font-size:13px; display:none; }
+  #empty { padding:48px 16px; text-align:center; color:var(--muted); }
+  .stats { display:flex; flex-wrap:wrap; gap:8px 18px; padding:10px 16px; color:var(--muted); font-size:13px; }
+  .stats b { color:var(--text); font-weight:600; }
+  .legend { display:flex; flex-wrap:wrap; gap:6px 14px; padding:0 16px 8px; font-size:13px; color:var(--muted); }
+  .dot { display:inline-block; width:10px; height:10px; border-radius:3px; margin-right:6px; vertical-align:-1px; }
+  h2 { font-size:15px; margin:14px 16px 6px; }
+  #log { margin:0 16px; padding:0; list-style:none; max-height:220px; overflow:auto; border:1px solid var(--line); border-radius:10px; }
+  #log li { padding:7px 10px; border-bottom:1px solid var(--line); font-size:13px; }
+  #log li:last-child { border-bottom:0; }
+  #log li.none { color:var(--muted); }
+  .note { margin:12px 16px 24px; color:var(--muted); font-size:12.5px; }
+  .note p { margin:6px 0; }
+  .tag { color:#fff; border-radius:6px; padding:1px 6px; font-weight:600; font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Loop Live</h1>
+  <span class="sub">Point any camera at a road. Each road user's path is predicted about 2 seconds ahead, and pairs about to collide turn red.</span>
+</header>
+
+<div class="bar">
+  <select id="cam" aria-label="Camera"><option value="">Camera…</option></select>
+  <button id="startCam" class="primary">Start camera</button>
+  <label class="file">Use a video file<input id="file" type="file" accept="video/*"></label>
+  <button id="stop" disabled>Stop</button>
+</div>
+
+<div id="stage">
+  <div id="empty">Loading the detector…</div>
+  <video id="video" playsinline muted></video>
+  <canvas id="view" hidden></canvas>
+  <div id="banner">⚠ About to collide</div>
+  <div id="hold">Camera is moving: hold it still or rest it on something</div>
+</div>
+
+<div class="stats">
+  <span>Detector: <b id="ep">loading</b></span>
+  <span>Detections per second: <b id="fps">–</b></span>
+  <span>Road users now: <b id="n">0</b></span>
+  <span>Warnings: <b id="nw">0</b></span>
+</div>
+<div class="legend">
+  <span><span class="dot" style="background:var(--blue)"></span>vehicle and its predicted path</span>
+  <span><span class="dot" style="background:var(--green)"></span>two-wheeler</span>
+  <span><span class="dot" style="background:#c08cff"></span>person</span>
+  <span><span class="dot" style="background:var(--amber)"></span>paths meet within 2 s</span>
+  <span><span class="dot" style="background:var(--red)"></span>about to collide (under 1 s)</span>
+</div>
+
+<h2>Warnings</h2>
+<ul id="log"><li class="none">None yet.</li></ul>
+
+<div class="note">
+  <p><b>How it works.</b> A YOLO11n detector runs on this device and finds cars, two-wheelers, buses, trucks and people several times a second. Each one is tracked, and its path is projected forward at its current speed and direction. When two paths would overlap within 2 seconds, the pair turns amber. Under 1 second, while closing faster than about 15 km/h, it turns red and the warning is logged. Loop uses similar rules on recorded video.</p>
+  <p><b>Limits.</b> This is one ordinary camera with no calibration, so distances and speeds are rough and some warnings will be false. It predicts the next 1 to 2 seconds of motion, not crashes. Works best from a fixed, raised spot looking down at a junction. A moving or shaking camera makes everything look like it moves, so the page pauses warnings until it is held still.</p>
+  <p><b>Privacy.</b> The video is processed on this device. Nothing is uploaded or saved.</p>
+  <p><b>Laptop with DroidCam:</b> start DroidCam on the phone and the laptop, then pick "DroidCam" in the camera list above.</p>
+  <p>Detector: Ultralytics YOLO11n (AGPL-3.0). Runtime: ONNX Runtime Web.</p>
+</div>
+
+<script src="ort/ort.webgpu.min.js"></script>
+<script src="live.js"></script>
+</body>
+</html>
