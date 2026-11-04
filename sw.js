@@ -5,6 +5,7 @@ self.addEventListener('fetch', (e) => {
   const r = e.request;
   if (r.cache === 'only-if-cached' && r.mode !== 'same-origin') return;
   if (new URL(r.url).origin !== self.location.origin) return;
+  if (new URL(r.url).pathname.includes('/twin/')) return;     // the city twin page loads map tiles from other sites
   e.respondWith(fetch(r).then((res) => {
     if (res.status === 0) return res;
     const h = new Headers(res.headers);
