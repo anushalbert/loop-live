@@ -114,8 +114,12 @@ const card = (r) => `<div class="card ${r.status === 'pending' ? 'wait' : ''}"><
 
 const map = L.map('map', { zoomControl: true, preferCanvas: true })
   .setView([+(Q.get('lat') || 13.0827), +(Q.get('lon') || 80.2707)], +(Q.get('z') || (Q.get('lat') ? 15 : 11)));
-L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-  maxZoom: 20, subdomains: 'abcd', attribution: '&copy; OpenStreetMap contributors &copy; CARTO' }).addTo(map);
+const ESRI = 'https://server.arcgisonline.com/ArcGIS/rest/services/';
+const street = L.tileLayer(ESRI + 'World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 20, maxNativeZoom: 19, attribution: 'Tiles &copy; Esri, HERE, Garmin, &copy; OpenStreetMap contributors' }).addTo(map);
+const satellite = L.tileLayer(ESRI + 'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 20, maxNativeZoom: 19, attribution: 'Tiles &copy; Esri, Maxar, Earthstar Geographics' });
+L.control.layers({ Street: street, Satellite: satellite }, null, { position: 'topright', collapsed: false }).addTo(map);
 const cluster = L.markerClusterGroup({ maxClusterRadius: 40, showCoverageOnHover: false });
 map.addLayer(cluster);
 if (Q.get('lat')) L.circle([+Q.get('lat'), +Q.get('lon')], { radius: 150, color: '#3aa0ff', weight: 1, fillOpacity: .06 }).addTo(map);
