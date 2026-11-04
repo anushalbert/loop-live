@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Loop Live</title>
+<title>Viper Vision Live</title>
+<link rel="icon" href="viper_eye.png">
 <meta name="description" content="Live close-call warning from any camera pointed at a road. Runs on your device; no video leaves it.">
 <style>
   :root { --bg:#05070d; --panel:#0d1220; --line:#1f2a44; --text:#e8eefc; --muted:#8c9abb; --blue:#3aa0ff; --green:#25d17a; --amber:#ffb020; --red:#ff3b4e; }
@@ -43,8 +44,8 @@
 </head>
 <body>
 <header>
-  <h1>Loop Live</h1>
-  <span class="sub">Point any camera at a road. Each road user's path is predicted about 3 seconds ahead: amber when two paths meet within 3 s, red under 1.5 s.</span>
+  <h1><img src="viper_eye.png" alt="" style="width:30px;height:30px;vertical-align:-6px;margin-right:8px;filter:invert(1)">Viper Vision Live</h1>
+  <span class="sub">Point any camera at a road. Each road user gets an AR label with its typical mass, speed and acceleration, and its path is predicted ahead: amber when two paths meet within 3 s (4 s when a hit would be severe, like a bus and a two-wheeler), red under 1.5 s.</span>
 </header>
 
 <div class="bar">
@@ -75,7 +76,7 @@
   <span><span class="dot" style="background:var(--blue)"></span>vehicle and its predicted path</span>
   <span><span class="dot" style="background:var(--green)"></span>two-wheeler</span>
   <span><span class="dot" style="background:#c08cff"></span>person</span>
-  <span><span class="dot" style="background:var(--amber)"></span>heads-up: paths meet within 3 s</span>
+  <span><span class="dot" style="background:var(--amber)"></span>heads-up: paths meet within 3 s (4 s if severe)</span>
   <span><span class="dot" style="background:var(--red)"></span>about to collide (under 1.5 s)</span>
 </div>
 
@@ -83,8 +84,8 @@
 <ul id="log"><li class="none">None yet.</li></ul>
 
 <div class="note">
-  <p><b>How it works.</b> A YOLO11n detector runs on this device and finds cars, two-wheelers, buses, trucks and people several times a second. Each one is tracked, and its path is projected forward at its current speed and direction. When two paths would overlap within 3 seconds, the pair turns amber (a heads-up). Under 1.5 seconds, while closing faster than about 15 km/h, it turns red. Each one is logged with its pattern: crossing paths, same direction (rear-end or side-swipe), head-on, heading into a stopped vehicle, or a person in the path. Parked and stopped vehicles are tracked and labelled "still", so a vehicle heading into one is warned on. Loop uses similar rules on recorded video.</p>
-  <p><b>Limits.</b> This is one ordinary camera with no calibration, so distances and speeds are rough and some warnings will be false. It predicts the next 3 seconds of motion at current speed and direction, not crashes. Works best from a fixed, raised spot looking down at a junction. A moving or shaking camera makes everything look like it moves, so the page pauses warnings until it is held still.</p>
+  <p><b>How it works.</b> A YOLO11n detector runs on this device and finds cars, two-wheelers, buses, trucks and people several times a second. Each one is tracked, and its path is projected forward at its current speed and direction. When two paths would overlap within 3 seconds, the pair turns amber (a heads-up). Under 1.5 seconds, while closing faster than about 15 km/h, it turns red. Each one is logged with its pattern: crossing paths, same direction (rear-end or side-swipe), head-on, heading into a stopped vehicle, or a person in the path. Parked and stopped vehicles are tracked and labelled "still", so a vehicle heading into one is warned on. <b>Mass:</b> each road user gets a typical mass for its kind (car 1.2 t, bus 12 t, truck 15 t, two-wheeler with rider 200 kg, bicycle 85 kg, person 70 kg). For every warning, the crash energy if they hit (½ × m₁m₂/(m₁+m₂) × closing speed²) and who would take the biggest speed change are shown, and pairs where a hit would be severe get their heads-up 4 s ahead instead of 3. A yellow ✕ marks where two paths would cross. Viper Vision uses similar rules on recorded video.</p>
+  <p><b>Limits.</b> This is one ordinary camera with no calibration, so distances, speeds and accelerations are rough and some warnings will be false. Masses are typical values, not weighed: the detector can't tell a loaded truck from an empty one, and it has no auto-rickshaw class. It predicts the next 3 seconds of motion at current speed and direction, not crashes. Works best from a fixed, raised spot looking down at a junction. A moving or shaking camera makes everything look like it moves, so the page pauses warnings until it is held still.</p>
   <p><b>Privacy.</b> The video is processed on this device. Nothing is uploaded or saved.</p>
   <p><b>Laptop with DroidCam:</b> start DroidCam on the phone and the laptop, then pick "DroidCam" in the camera list above.</p>
   <p>Detector: Ultralytics YOLO11n (AGPL-3.0). Runtime: ONNX Runtime Web.</p>

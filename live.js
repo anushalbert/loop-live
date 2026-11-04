@@ -1,4 +1,4 @@
-/* Loop Live: in-browser detection, tracking and short-horizon path prediction from one camera.
+/* Viper Vision Live: in-browser detection, tracking and short-horizon path prediction from one camera.
    Same idea as Loop's recorded-video rules (src/replay/cctv.py): footprints, swept-box time to
    collision, rough metres from each road user's typical width. Nothing leaves the device. */
 'use strict';
@@ -17,6 +17,20 @@ const AMBER_TTC = 3.0, AMBER_CLOSING = 3.5;      // amber: paths meet within 3 s
 const FAST_CLOSING = 6.0;                        // > ~22 km/h: on slow devices, warn on the first look
 const LOST_S = 0.8, LOST_STILL_S = 2.0, VEL_WINDOW = 0.6;   // parked vehicles flicker in and out: keep them longer
 const STILL = 0.8;                               // m/s: slower than this is shown as "still"
+// typical mass with people on board (kg): a camera can't weigh a vehicle; YOLO has no auto-rickshaw class
+const MASS = { car: 1200, bus: 12000, truck: 15000, motorcycle: 200, bicycle: 85, person: 70 };
+const UNPROTECTED = new Set(['motorcycle', 'bicycle', 'person']);
+const DANGER_AMBER_TTC = 4.0;                    // dangerous pairs (high crash severity) get a heads-up sooner
+/* crash physics if they hit at the closing speed: momentum conserved, fully plastic (worst case) */
+function crashOf(ca, cb, v) {
+  const ma = MASS[ca], mb = MASS[cb], mu = ma * mb / (ma + mb);
+  const dva = mb / (ma + mb) * v, dvb = ma / (ma + mb) * v;
+  const wa = dva * (UNPROTECTED.has(ca) ? 2 : 1), wb = dvb * (UNPROTECTED.has(cb) ? 2 : 1);
+  const [who, dv] = wa >= wb ? [ca, dva] : [cb, dvb];
+  const high = dv * 3.6 >= (UNPROTECTED.has(who) ? 20 : 40);
+  return { energy: 0.5 * mu * v * v, who, dv, high };
+}
+const massTxt = (c) => MASS[c] >= 1000 ? (MASS[c] / 1000).toFixed(1) + ' t' : MASS[c] + ' kg';
 
 const $ = (id) => document.getElementById(id);
 const video = $('video'), view = $('view'), ctx = view.getContext('2d');
@@ -160,6 +174,14 @@ function updateTracks(dets, t, W) {
     T.hist.push({ t, x: f[0], y: f[1] });
     while (T.hist.length && T.hist[0].t < t - 1.6) T.hist.shift();
     T.v = velocity(T.hist);
+    // acceleration: slope of the speed over the last second (noisy from video: an estimate)
+    T.sh = (T.sh || []); T.sh.push({ t, v: speedMs(T) });
+    while (T.sh.length && T.sh[0].t < t - 1.0) T.sh.shift();
+    if (T.sh.length >= 4) {
+      const mt = T.sh.reduce((a, p) => a + p.t, 0) / T.sh.length, mv = T.sh.reduce((a, p) => a + p.v, 0) / T.sh.length;
+      let den = 0, num = 0; for (const p of T.sh) { den += (p.t - mt) ** 2; num += (p.t - mt) * (p.v - mv); }
+      T.acc = den > 1e-6 ? num / den : 0;
+    }
   }
   dets.forEach((D, j) => {
     if (usedD.has(j)) return;
@@ -223,16 +245,18 @@ function assess(t) {
     if (g.size === 1 && g.has('ped')) continue;                                          // people walking together
     const fa = foot(A.box), fb = foot(B.box);
     if (overlapSmall(fa, fb) > 0.25) continue;                 // already overlapping: occlusion, not a prediction
-    const ttc = sweptTTC(fa, fb, A.v, B.v, AMBER_TTC);
+    const ttc = sweptTTC(fa, fb, A.v, B.v, DANGER_AMBER_TTC);
     if (!isFinite(ttc)) continue;
     const ca = center(fa), cb = center(fb), d = [cb[0] - ca[0], cb[1] - ca[1]], dn = Math.hypot(d[0], d[1]) || 1;
     const closing = -(d[0] * (B.v[0] - A.v[0]) + d[1] * (B.v[1] - A.v[1])) / dn * Math.min(mpp(A), mpp(B));
-    const level = ttc < RED_TTC && closing > RED_CLOSING ? 2 : closing > AMBER_CLOSING ? 1 : 0;
+    const cr = crashOf(A.cls, B.cls, Math.max(closing, 0));
+    const amberT = cr.high ? DANGER_AMBER_TTC : AMBER_TTC;       // mass: warn sooner where a hit would be severe
+    const level = ttc < RED_TTC && closing > RED_CLOSING ? 2 : ttc < amberT && closing > AMBER_CLOSING ? 1 : 0;
     if (!level) continue;
     const key = A.id < B.id ? `${A.id}-${B.id}` : `${B.id}-${A.id}`;
     const prev = pairState.get(key);
     const streak = prev && prev.level >= level ? prev.streak + 1 : 1;
-    now.set(key, { a: A, b: B, ttc, closing, level, streak, kind: pattern(A, B) });
+    now.set(key, { a: A, b: B, ttc, closing, level, streak, kind: pattern(A, B), cr });
   }
   pairState = now;
   for (const [key, ft] of firstSeen) if (!now.has(key) && t - ft.last > 1.0) firstSeen.delete(key);
@@ -245,13 +269,13 @@ function assess(t) {
     // (slow queues bunch up all the time: only approaches fast enough to turn red are logged)
     if (p.level === 1 && !f.logged && p.closing > RED_CLOSING) {
       f.logged = 1;
-      warnings.unshift({ t, level: 1, a: p.a.cls, b: p.b.cls, ttc: p.ttc, kmh: p.closing * 3.6, kind: p.kind, lead: 0 });
+      warnings.unshift({ t, level: 1, a: p.a.cls, b: p.b.cls, ttc: p.ttc, kmh: p.closing * 3.6, kind: p.kind, lead: 0, cr: p.cr });
       renderLog();
     }
     if (p.level < 2 || t - (lastLogged.get(key) ?? -1e9) < 3) continue;
     lastLogged.set(key, t); f.logged = 2;
     warnings.unshift({ t, level: 2, a: p.a.cls, b: p.b.cls, ttc: p.ttc, kmh: p.closing * 3.6, kind: p.kind,
-                       lead: t - f.t + p.ttc });
+                       lead: t - f.t + p.ttc, cr: p.cr });
     renderLog();
   }
 }
@@ -266,8 +290,8 @@ function renderLog() {
   const red = warnings.filter(w => w.level === 2).length;
   $('nw').textContent = `${red} red · ${warnings.length - red} heads-up`;
   $('log').innerHTML = warnings.length ? warnings.slice(0, 50).map(w => w.level === 2
-    ? `<li><span class="tag" style="background:${RED}">about to collide</span> ${NAME[w.a]} and ${NAME[w.b]} · ${w.kind} · in ${w.ttc.toFixed(1)} s · closing ~${Math.round(w.kmh)} km/h · first flagged ${w.lead.toFixed(1)} s before · ${clock(w.t)}</li>`
-    : `<li><span class="tag" style="background:${AMBER};color:#1a1000">heads-up</span> ${NAME[w.a]} and ${NAME[w.b]} · ${w.kind} · paths meet in ${w.ttc.toFixed(1)} s · ${clock(w.t)}</li>`).join('')
+    ? `<li><span class="tag" style="background:${RED}">about to collide</span> ${NAME[w.a]} and ${NAME[w.b]} · ${w.kind} · in ${w.ttc.toFixed(1)} s · closing ~${Math.round(w.kmh)} km/h · if they hit: ${(w.cr.energy / 1000).toFixed(0)} kJ, ${NAME[w.cr.who]} speed change ~${Math.round(w.cr.dv * 3.6)} km/h${w.cr.high ? ' (high severity)' : ''} · first flagged ${w.lead.toFixed(1)} s before · ${clock(w.t)}</li>`
+    : `<li><span class="tag" style="background:${AMBER};color:#1a1000">heads-up</span> ${NAME[w.a]} and ${NAME[w.b]} · ${w.kind} · paths meet in ${w.ttc.toFixed(1)} s${w.cr.high ? ' · high severity if they hit: warned early' : ''} · ${clock(w.t)}</li>`).join('')
     : '<li class="none">None yet.</li>';
 }
 
@@ -314,7 +338,9 @@ function draw() {
     ctx.beginPath(); ctx.ellipse(fx, b[3], fw / 2, Math.max(3, fw / 10), 0, 0, Math.PI * 2);
     ctx.fillStyle = col + '55'; ctx.fill();
     // what it is, and whether it is still
-    const tag = NAME[T.cls] + (isStill(T) ? ' · still' : ''), fs = Math.max(11, Math.min(16, W / 90));
+    const tag = NAME[T.cls] + ' ' + massTxt(T.cls) + (isStill(T) ? ' · still'
+      : ` · ${Math.round(speedMs(T) * 3.6)} km/h · ${(T.acc || 0) >= 0 ? '+' : ''}${(T.acc || 0).toFixed(1)} m/s²`),
+          fs = Math.max(11, Math.min(15, W / 95));
     ctx.font = `600 ${fs}px system-ui, sans-serif`;
     const tw = ctx.measureText(tag).width, ty = Math.max(fs + 4, b[1] - 4);
     ctx.fillStyle = 'rgba(5,7,13,.75)'; roundRect(b[0], ty - fs - 2, tw + 8, fs + 6, 4); ctx.fill();
@@ -330,7 +356,19 @@ function draw() {
     const ax = ca[0] * sx, ay = ca[1] * sy, bx = cb[0] * sx, by = cb[1] * sy, col = p.level === 2 ? RED : AMBER;
     ctx.setLineDash([lw * 3, lw * 3]); ctx.strokeStyle = col; ctx.lineWidth = lw;
     ctx.beginPath(); ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.stroke(); ctx.setLineDash([]);
-    const label = `${p.ttc.toFixed(1)} s`, mx = (ax + bx) / 2, my = (ay + by) / 2 - 10, tw = ctx.measureText(label).width;
+    // where the two predicted paths cross
+    const da = [p.a.v[0] * sx * HORIZON, p.a.v[1] * sy * HORIZON], db = [p.b.v[0] * sx * HORIZON, p.b.v[1] * sy * HORIZON];
+    const den = da[0] * db[1] - da[1] * db[0];
+    if (Math.abs(den) > 1e-6) {
+      const u = ((bx - ax) * db[1] - (by - ay) * db[0]) / den, w2 = ((bx - ax) * da[1] - (by - ay) * da[0]) / den;
+      if (u >= 0 && u <= 1 && w2 >= 0 && w2 <= 1) {
+        const X = ax + u * da[0], Y = ay + u * da[1], r = Math.max(8, W / 90);
+        ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = lw * 1.5;
+        ctx.beginPath(); ctx.arc(X, Y, r, 0, Math.PI * 2); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(X - r * .6, Y - r * .6); ctx.lineTo(X + r * .6, Y + r * .6); ctx.moveTo(X + r * .6, Y - r * .6); ctx.lineTo(X - r * .6, Y + r * .6); ctx.stroke();
+      }
+    }
+    const label = `${p.ttc.toFixed(1)} s · ${(p.cr.energy / 1000).toFixed(0)} kJ`, mx = (ax + bx) / 2, my = (ay + by) / 2 - 10, tw = ctx.measureText(label).width;
     ctx.fillStyle = col; roundRect(mx - tw / 2 - 6, my - 14, tw + 12, 22, 6); ctx.fill();
     ctx.fillStyle = '#fff'; ctx.fillText(label, mx - tw / 2, my + 2);
   }
